@@ -1,0 +1,146 @@
+const pool = require("../config/postgres");
+const { logActivity } = require("../services/activityService");
+
+async function getComplaints(req, res) {
+  try {
+    const result = await pool.query(`
+      SELECT
+        c.*,
+        s.student_number,
+        s.name AS student_name
+      FROM complaints c
+      JOIN students s ON s.student_id = c.student_id
+      ORDER BY c.complaint_id DESC
+    `);
+
+    res.json({
+      success: true,
+      complaints: result.rows,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch complaints",
+      error: error.message,
+    });
+  }
+}
+
+async function createComplaint(req, res) {
+  try {
+    const {
+      studentId,
+      title,
+      description,
+      category,
+      priority = "medium",
+    } = req.body;
+
+    if (!studentId || !title || !description) {
+      return res.status(400).json({
+        success: false,
+        message: "studentId, title and description are required",
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO complaints
+       (student_id, title, description, category, priority)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING *`,
+      [
+        studentId,
+        title,
+        description,
+        category || null,
+        priority,
+      ]
+    );
+
+    await logActivity({
+      userId: req.user.userId,
+      action: "CREATE_COMPLAINT",
+      entity: "complaint",
+      entityId: result.rows[0].complaint_id,
+    });
+
+    res.status(201).json({
+      success: true,
+      complaint: result.rows[0],
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to create complaint",
+      error: error.message,
+    });
+  }
+}
+
+async function updateComplaint(req, res) {
+  try {
+    const {
+      status,
+      priority,
+      resolution,
+    } = req.body;
+
+    const resolvedAt =
+      status === "resolved" || status === "closed"
+        ? new Date()
+        : null;
+
+    const result = await pool.query(
+      `UPDATE complaints
+       SET
+         status = COALESCE($1, status),
+         priority = COALESCE($2, priority),
+         resolution = COALESCE($3, resolution),
+         resolved_at = CASE
+           WHEN $1 IN ('resolved', 'closed')
+           THEN $4
+           ELSE resolved_at
+         END
+       WHERE complaint_id = $5
+       RETURNING *`,
+      [
+        status || null,
+        priority || null,
+        resolution || null,
+        resolvedAt,
+        req.params.id,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Complaint not found",
+      });
+    }
+
+    await logActivity({
+      userId: req.user.userId,
+      action: "UPDATE_COMPLAINT",
+      entity: "complaint",
+      entityId: result.rows[0].complaint_id,
+    });
+
+    res.json({
+      success: true,
+      complaint: result.rows[0],
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to update complaint",
+      error: error.message,
+    });
+  }
+}
+
+module.exports = {
+  getComplaints,
+  createComplaint,
+  updateComplaint,
+};

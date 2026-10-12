@@ -1,0 +1,24 @@
+const express = require("express");
+const {
+  getStudents,
+  getStudent,
+  createStudent,
+} = require("../controllers/studentController");
+const {
+  authenticate,
+  authorize,
+} = require("../middleware/auth");
+
+const router = express.Router();
+
+router.get("/", authenticate, getStudents);
+router.get("/:id", authenticate, getStudent);
+
+router.post(
+  "/",
+  authenticate,
+  authorize("admin", "warden"),
+  createStudent
+);
+
+module.exports = router;

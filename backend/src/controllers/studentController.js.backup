@@ -1,0 +1,149 @@
+const pool = require("../config/postgres");
+const { logActivity } = require("../services/activityService");
+
+async function getStudents(req, res) {
+  try {
+    const result = await pool.query(`
+      SELECT
+        s.*,
+        u.username,
+        u.role,
+        h.hostel_name,
+        r.room_number,
+        a.status AS allocation_status
+      FROM students s
+      LEFT JOIN users u ON u.user_id = s.user_id
+      LEFT JOIN allocations a
+        ON a.student_id = s.student_id
+        AND a.status = 'active'
+      LEFT JOIN rooms r ON r.room_id = a.room_id
+      LEFT JOIN hostels h ON h.hostel_id = r.hostel_id
+      ORDER BY s.student_id DESC
+    `);
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      students: result.rows,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch students",
+      error: error.message,
+    });
+  }
+}
+
+async function getStudent(req, res) {
+  try {
+    const result = await pool.query(
+      `SELECT
+        s.*,
+        u.username,
+        u.role,
+        h.hostel_name,
+        r.room_number,
+        r.room_type,
+        r.capacity,
+        r.current_occupancy,
+        a.status AS allocation_status,
+        a.allocation_date,
+        a.vacated_date
+      FROM students s
+      LEFT JOIN users u ON u.user_id = s.user_id
+      LEFT JOIN allocations a
+        ON a.student_id = s.student_id
+        AND a.status = 'active'
+      LEFT JOIN rooms r ON r.room_id = a.room_id
+      LEFT JOIN hostels h ON h.hostel_id = r.hostel_id
+      WHERE s.student_id = $1`,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      student: result.rows[0],
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch student",
+      error: error.message,
+    });
+  }
+}
+
+async function createStudent(req, res) {
+  const client = await pool.connect();
+
+  try {
+    const {
+      userId,
+      studentNumber,
+      name,
+      department,
+      year,
+      contact,
+      email,
+      preferences = {},
+    } = req.body;
+
+    if (!studentNumber || !name || !department) {
+      return res.status(400).json({
+        success: false,
+        message: "Student number, name and department are required",
+      });
+    }
+
+    const result = await client.query(
+      `INSERT INTO students
+       (user_id, student_number, name, department, year, contact, email, preferences)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING *`,
+      [
+        userId || null,
+        studentNumber,
+        name,
+        department,
+        year || null,
+        contact || null,
+        email || null,
+        preferences,
+      ]
+    );
+
+    await logActivity({
+      userId: req.user.userId,
+      action: "CREATE",
+      entity: "student",
+      entityId: result.rows[0].student_id,
+    });
+
+    res.status(201).json({
+      success: true,
+      student: result.rows[0],
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to create student",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = {
+  getStudents,
+  getStudent,
+  createStudent,
+};
